@@ -29,6 +29,8 @@ import org.readium.r2.navigator.Decoration
 import org.readium.r2.navigator.epub.EpubNavigatorFactory
 import org.readium.r2.navigator.epub.EpubNavigatorFragment
 import org.readium.r2.navigator.epub.EpubPreferences
+import org.readium.r2.navigator.input.InputListener
+import org.readium.r2.navigator.input.TapEvent
 import org.readium.r2.shared.publication.Link
 import org.readium.r2.shared.publication.Locator
 import org.readium.r2.shared.publication.Publication
@@ -105,6 +107,18 @@ internal class ReaderViewModel(
 
     private val throttle = ProgressThrottle()
 
+    private val prefs = ReaderPrefs(app)
+
+    /** One continuous scroll, or turned pages. Readium's own default is pages. */
+    private val _scroll = MutableStateFlow(prefs.scroll)
+    val scroll: StateFlow<Boolean> = _scroll.asStateFlow()
+
+    /**
+     * Held so it can be taken off the previous fragment. A configuration change hands us
+     * a new navigator over the same publication, and listeners do not follow it across.
+     */
+    private var tapListener: InputListener? = null
+
     /** Never regress the shelf to 0% because one locator arrived without a position. */
     private var lastProgression: Double = book.progression
 
@@ -141,7 +155,7 @@ internal class ReaderViewModel(
                         configuration = EpubNavigatorFactory.Configuration()
                     ).createFragmentFactory(
                         initialLocator = startingLocator(),
-                        initialPreferences = EpubPreferences(),
+                        initialPreferences = EpubPreferences(scroll = _scroll.value),
                         configuration = EpubNavigatorFragment.Configuration {
                             // Replacing the system text-selection menu is the only hook
                             // Readium gives into a WebView selection. It carries a single
@@ -212,7 +226,9 @@ internal class ReaderViewModel(
      */
     fun bind(fragment: EpubNavigatorFragment) {
         if (navigator === fragment) return
+        tapListener?.let { navigator?.removeInputListener(it) }
         navigator = fragment
+        installTapToTurn(fragment)
         navigatorJobs?.cancel()
         navigatorJobs = viewModelScope.launch {
             launch { observePosition(fragment) }
@@ -244,6 +260,44 @@ internal class ReaderViewModel(
         annotations.collect { rows ->
             fragment.applyDecorations(decorationsFor(rows), group = DECORATION_GROUP)
         }
+    }
+
+    /**
+     * Tapping the outer quarter of the page turns it.
+     *
+     * Without this the only way to move through a paginated book is a horizontal swipe,
+     * which nothing on screen suggests — the first thing most readers try is a tap, and
+     * the second is a scroll. The middle half is left alone so that tapping a word still
+     * reaches the text selection underneath.
+     */
+    private fun installTapToTurn(fragment: EpubNavigatorFragment) {
+        val listener = object : InputListener {
+            override fun onTap(event: TapEvent): Boolean {
+                // In scroll mode a tap is not a page turn; the content moves under the
+                // finger instead, and stealing the tap would break link taps.
+                if (_scroll.value) return false
+                val width = fragment.view?.width?.toFloat() ?: return false
+                if (width <= 0f) return false
+                return when {
+                    event.point.x < width * EDGE -> fragment.goBackward(animated = true)
+                    event.point.x > width * (1f - EDGE) -> fragment.goForward(animated = true)
+                    else -> false
+                }
+            }
+        }
+        fragment.addInputListener(listener)
+        tapListener = listener
+    }
+
+    /**
+     * Switches between pages and one continuous scroll, live. The navigator keeps its
+     * position across the change, so this does not cost the reader their place.
+     */
+    fun toggleScroll() {
+        val next = !_scroll.value
+        _scroll.value = next
+        prefs.scroll = next
+        navigator?.submitPreferences(EpubPreferences(scroll = next))
     }
 
     /**
@@ -537,5 +591,11 @@ internal class ReaderViewModel(
         /** Readium keys decorations by group; ours are all highlights of annotations. */
         const val DECORATION_GROUP = "annotations"
         const val ANNOTATE_ITEM = 1
+
+        /**
+         * How much of each side turns the page. A quarter is wide enough to hit without
+         * aiming and narrow enough to leave the text in the middle selectable.
+         */
+        const val EDGE = 0.25f
     }
 }

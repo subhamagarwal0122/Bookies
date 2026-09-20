@@ -93,13 +93,16 @@ fun ReaderScreen(
     val state by viewModel.state.collectAsStateWithLifecycle()
     val message by viewModel.message.collectAsStateWithLifecycle()
     val pendingSelection by viewModel.pendingSelection.collectAsStateWithLifecycle()
+    val scrolling by viewModel.scroll.collectAsStateWithLifecycle()
 
     Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
         Column(Modifier.fillMaxSize().systemBarsPadding()) {
             ReaderBar(
                 title = book.title,
                 canBookmark = state is ReaderViewModel.State.Ready,
+                scrolling = scrolling,
                 onClose = onClose,
+                onToggleScroll = viewModel::toggleScroll,
                 onBookmark = viewModel::bookmarkHere
             )
 
@@ -205,7 +208,9 @@ private fun Navigator(
 private fun ReaderBar(
     title: String,
     canBookmark: Boolean,
+    scrolling: Boolean,
     onClose: () -> Unit,
+    onToggleScroll: () -> Unit,
     onBookmark: () -> Unit
 ) {
     Row(
@@ -225,7 +230,14 @@ private fun ReaderBar(
             overflow = TextOverflow.Ellipsis,
             color = MaterialTheme.colorScheme.onBackground
         )
-        if (canBookmark) TextButton(onClick = onBookmark) { Text("Bookmark") }
+        if (canBookmark) {
+            // Named for what tapping it gives you, not for the state you are in: a
+            // control labelled with its current mode is read as a label half the time.
+            TextButton(onClick = onToggleScroll) {
+                Text(if (scrolling) "Pages" else "Scroll")
+            }
+            TextButton(onClick = onBookmark) { Text("Bookmark") }
+        }
     }
 }
 
