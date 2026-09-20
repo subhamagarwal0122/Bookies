@@ -2,7 +2,9 @@ package com.bookies.reader.ui.shelf
 
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
@@ -45,6 +47,8 @@ fun ShelfScreen(
     viewModel: ShelfViewModel,
     onOpenBook: (BookEntity) -> Unit,
     onAddBook: () -> Unit,
+    onBookActions: (BookEntity) -> Unit,
+    onSearch: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val books by viewModel.books.collectAsStateWithLifecycle()
@@ -62,6 +66,7 @@ fun ShelfScreen(
                     book = book,
                     transfer = transfers[book.id],
                     onClick = { onOpenBook(book) },
+                    onActions = { onBookActions(book) },
                     modifier = Modifier.padding(8.dp)
                 )
             }
@@ -80,17 +85,33 @@ fun ShelfScreen(
         }
 
         // Small, and in the shelf's own colours rather than Material's default container:
-        // the library is the subject here, this is only the way in. A glyph rather than
-        // an Icon keeps material-icons off the dependency list.
-        SmallFloatingActionButton(
-            onClick = onAddBook,
-            containerColor = MaterialTheme.colorScheme.primary,
-            contentColor = MaterialTheme.colorScheme.background,
+        // the library is the subject here, these are only the ways in. Glyphs rather than
+        // Icons keep material-icons off the dependency list.
+        Column(
+            horizontalAlignment = Alignment.CenterHorizontally,
+            verticalArrangement = Arrangement.spacedBy(12.dp),
             modifier = Modifier
                 .align(Alignment.BottomEnd)
                 .padding(20.dp)
         ) {
-            Text(text = "+", style = MaterialTheme.typography.titleLarge)
+            // Search spans the whole library, archived books included — which is the
+            // point of keeping annotations on the device after the EPUB leaves. It
+            // belongs on the shelf rather than inside a book for exactly that reason.
+            SmallFloatingActionButton(
+                onClick = onSearch,
+                containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
+                contentColor = MaterialTheme.colorScheme.primary
+            ) {
+                Text(text = "⌕", style = MaterialTheme.typography.titleMedium)
+            }
+
+            SmallFloatingActionButton(
+                onClick = onAddBook,
+                containerColor = MaterialTheme.colorScheme.primary,
+                contentColor = MaterialTheme.colorScheme.background
+            ) {
+                Text(text = "+", style = MaterialTheme.typography.titleLarge)
+            }
         }
     }
 }
@@ -144,6 +165,7 @@ private fun BookCell(
     book: BookEntity,
     transfer: ShelfViewModel.Transfer?,
     onClick: () -> Unit,
+    onActions: () -> Unit,
     modifier: Modifier = Modifier
 ) {
     val shelfColor = MaterialTheme.colorScheme.surfaceVariant
@@ -187,6 +209,15 @@ private fun BookCell(
                         .fillMaxWidth()
                 )
             }
+
+            // Archive, restore and export live here rather than behind a long-press:
+            // archiving is the point of the app, and an invisible gesture is not a way in.
+            BookActionsButton(
+                onClick = onActions,
+                modifier = Modifier
+                    .align(Alignment.BottomEnd)
+                    .padding(4.dp)
+            )
         }
     }
 }

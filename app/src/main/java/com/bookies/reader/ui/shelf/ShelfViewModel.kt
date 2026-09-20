@@ -43,11 +43,17 @@ class ShelfViewModel(private val app: BookiesApp) : ViewModel() {
             .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
 
     /**
-     * The most recently rendered Markdown export. Rendering it is the portable artefact;
-     * where it then goes — clipboard, share sheet, a file on Drive — is not wired yet.
+     * A rendered export that has not left the app yet.
+     *
+     * Rendering the Markdown was never the hard part; it used to stop here, in a flow
+     * nothing collected, which is indistinguishable from the button doing nothing. The
+     * UI consumes this, hands it to the share sheet and reports back through
+     * [exportHandled] — an export only counts once it is out of app-private storage.
      */
-    private val _lastExport = MutableStateFlow<String?>(null)
-    val lastExport: StateFlow<String?> = _lastExport.asStateFlow()
+    data class Export(val book: BookEntity, val markdown: String)
+
+    private val _pendingExport = MutableStateFlow<Export?>(null)
+    val pendingExport: StateFlow<Export?> = _pendingExport.asStateFlow()
 
     fun select(book: BookEntity?) {
         _selectedBookId.value = book?.id
@@ -91,9 +97,32 @@ class ShelfViewModel(private val app: BookiesApp) : ViewModel() {
         _message.value = if (uris.size > 1) "$imported of ${uris.size} added · $last" else last
     }
 
+    /**
+     * Renders a book's annotations and queues them for a destination.
+     *
+     * No branch on [com.bookies.reader.data.model.BookFormat] anywhere in here: a paper
+     * book exports exactly the way an EPUB does, which is the point of the two sharing
+     * one table.
+     */
     fun export(book: BookEntity) = viewModelScope.launch {
-        _lastExport.value =
-            MarkdownExporter.render(book, app.database.annotations().forBookOnce(book.id))
+        val rows = app.database.annotations().forBookOnce(book.id)
+        if (rows.isEmpty()) {
+            // A share sheet carrying a header and no passages reads as a broken export,
+            // so say why instead of handing one over.
+            _message.value = "“${book.title}” has no annotations to export"
+            return@launch
+        }
+        _pendingExport.value = Export(book, MarkdownExporter.render(book, rows))
+    }
+
+    /**
+     * Called once the export has been offered to a destination. [error] is non-null when
+     * it never got there — silence would leave the reader believing a file exists
+     * somewhere that does not.
+     */
+    fun exportHandled(error: String? = null) {
+        _pendingExport.value = null
+        if (error != null) _message.value = error
     }
 
     /** Per-book transfer progress, keyed by book id, so the shelf can show it inline. */
@@ -102,12 +131,19 @@ class ShelfViewModel(private val app: BookiesApp) : ViewModel() {
 
     data class Transfer(val label: String, val fraction: Float?)
 
+    /**
+     * Uploads the book and frees its local EPUB. [ArchiveManager] does not delete
+     * anything until Drive's own MD5 of what landed matches the bundle we packed, so a
+     * failure here costs bandwidth and leaves the book exactly where it was.
+     */
     fun archive(book: BookEntity, token: String) = viewModelScope.launch {
         setTransfer(book.id, Transfer("Packing", null))
         val result = app.archiveManager.archive(book.id, token) { label ->
             setTransfer(book.id, Transfer(label, null))
         }
-        clearTransfer(book.id, result)
+        // Worth saying out loud, because the shelf looks identical afterwards: the file
+        // went, the notes did not.
+        clearTransfer(book.id, result, "“${book.title}” is in Drive · annotations stay here")
     }
 
     /**
@@ -134,10 +170,10 @@ class ShelfViewModel(private val app: BookiesApp) : ViewModel() {
         _transfers.value = _transfers.value + (id to transfer)
     }
 
-    private fun clearTransfer(id: String, result: ArchiveManager.Result) {
+    private fun clearTransfer(id: String, result: ArchiveManager.Result, onSuccess: String? = null) {
         _transfers.value = _transfers.value - id
         _message.value = when (result) {
-            is ArchiveManager.Result.Success -> null
+            is ArchiveManager.Result.Success -> onSuccess
             is ArchiveManager.Result.Failed -> "Transfer failed: ${result.reason}"
             is ArchiveManager.Result.BundleMissing -> "That book's backup is missing from Drive"
         }

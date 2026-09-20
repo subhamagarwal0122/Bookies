@@ -15,6 +15,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:theme="@style/Theme.Bookies"
+            android:configChanges="orientation|screenSize|screenLayout|smallestScreenSize|keyboardHidden|density|uiMode"
             android:windowSoftInputMode="adjustResize">
 
             <intent-filter>
@@ -38,5 +39,20 @@
                 <data android:mimeType="application/epub+zip" />
             </intent-filter>
         </activity>
+
+        <!--
+          Everything Bookies writes is app-private, so a Markdown export cannot be handed
+          to another app as a file:// path at all. This is the seam that makes the share
+          sheet possible, scoped in res/xml/file_paths.xml to the export directory alone.
+        -->
+        <provider
+            android:name="androidx.core.content.FileProvider"
+            android:authorities="${applicationId}.fileprovider"
+            android:exported="false"
+            android:grantUriPermissions="true">
+            <meta-data
+                android:name="android.support.FILE_PROVIDER_PATHS"
+                android:resource="@xml/file_paths" />
+        </provider>
     </application>
 </manifest>

@@ -3,7 +3,6 @@ package com.bookies.reader
 import android.content.Intent
 import android.net.Uri
 import android.os.Bundle
-import androidx.activity.ComponentActivity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.setContent
 import androidx.activity.result.IntentSenderRequest
@@ -25,16 +24,22 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.unit.dp
 import androidx.core.content.IntentCompat
+import androidx.fragment.app.FragmentActivity
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.ViewModelProvider
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.lifecycle.viewmodel.compose.viewModel
+import com.bookies.reader.data.db.AnnotationEntity
 import com.bookies.reader.data.db.BookEntity
 import com.bookies.reader.data.model.StorageState
 import com.bookies.reader.ui.index.AnnotationIndexScreen
+import com.bookies.reader.ui.reader.NavigatorFragments
 import com.bookies.reader.ui.reader.ReaderScreen
+import com.bookies.reader.ui.search.SearchScreen
+import com.bookies.reader.ui.shelf.BookActionsDialog
 import com.bookies.reader.ui.shelf.BookCover
+import com.bookies.reader.ui.shelf.ExportEffect
 import com.bookies.reader.ui.shelf.BookOpenTransition
 import com.bookies.reader.ui.shelf.ShelfScreen
 import com.bookies.reader.ui.shelf.ShelfViewModel
@@ -44,7 +49,13 @@ import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 
-class MainActivity : ComponentActivity() {
+/**
+ * A FragmentActivity rather than a ComponentActivity: Readium's navigator is a Fragment,
+ * and `AndroidFragment` finds its FragmentManager by walking up to a FragmentActivity.
+ * FragmentActivity extends ComponentActivity, so setContent and the result APIs are
+ * unaffected.
+ */
+class MainActivity : FragmentActivity() {
 
     private val app: BookiesApp get() = application as BookiesApp
 
@@ -82,6 +93,11 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onCreate(savedInstanceState: Bundle?) {
+        // Before super, which is where a FragmentManager rebuilds its fragments after
+        // process death. EpubNavigatorFragment has no no-arg constructor, so that rebuild
+        // would take the app down before a line of Compose ran; this factory stands a
+        // placeholder in until the reader installs the real one.
+        supportFragmentManager.fragmentFactory = NavigatorFragments
         super.onCreate(savedInstanceState)
 
         // Only on a genuinely fresh launch. A rotation or a process restart re-delivers
@@ -96,6 +112,11 @@ class MainActivity : ComponentActivity() {
                 val transfers by viewModel.transfers.collectAsStateWithLifecycle()
                 val message by viewModel.message.collectAsStateWithLifecycle()
 
+                // Rendering the Markdown is asynchronous; this is what finally gets it
+                // out of app-private storage and in front of another app.
+                val pendingExport by viewModel.pendingExport.collectAsStateWithLifecycle()
+                ExportEffect(pendingExport) { error -> viewModel.exportHandled(error) }
+
                 // Picked files arrive on a channel from the activity's result callback.
                 LaunchedEffect(viewModel) {
                     for (uris in pendingImports) viewModel.import(contentResolver, uris)
@@ -105,7 +126,12 @@ class MainActivity : ComponentActivity() {
                 // cover swinging open onto the index, and the passage itself.
                 var selectedId by remember { mutableStateOf<String?>(null) }
                 var opening by remember { mutableStateOf(false) }
-                var reading by remember { mutableStateOf<BookEntity?>(null) }
+                var reading by remember { mutableStateOf<ReaderTarget?>(null) }
+
+                // Which cover's action sheet is open. An id, not a row, for the same
+                // reason selectedId is: a transfer rewrites storageState underneath it.
+                var actionsForId by remember { mutableStateOf<String?>(null) }
+                var searching by remember { mutableStateOf(false) }
 
                 // Re-read the row from the shelf flow each recomposition: a restore
                 // rewrites storageState, and a stale copy would leave the cover held
@@ -117,13 +143,33 @@ class MainActivity : ComponentActivity() {
                 // thing that silently stops working when the tree is rearranged; with a
                 // single enabled handler there is nothing to get wrong. Disabled on the
                 // shelf so back still leaves the app from there.
-                BackHandler(enabled = reading != null || book != null) {
-                    if (reading != null) reading = null else opening = false
+                //
+                // The order below is the order things are stacked on screen, outermost
+                // last. Search sits under the reader because a hit opens the reader on
+                // top of it, and backing out of the passage should land you on the
+                // results you were working through, not on the shelf.
+                BackHandler(enabled = reading != null || searching || book != null) {
+                    when {
+                        reading != null -> reading = null
+                        searching -> searching = false
+                        else -> opening = false
+                    }
                 }
 
                 val inReader = reading
                 if (inReader != null) {
-                    ReaderScreen(book = inReader)
+                    ReaderScreen(
+                        book = inReader.book,
+                        openAt = inReader.openAt,
+                        onClose = { reading = null }
+                    )
+                } else if (searching) {
+                    SearchScreen(
+                        onBack = { searching = false },
+                        onOpenResult = { hitBook, annotation ->
+                            reading = ReaderTarget(hitBook, annotation)
+                        }
+                    )
                 } else {
                     Box(Modifier.fillMaxSize()) {
                         ShelfScreen(
@@ -146,7 +192,9 @@ class MainActivity : ComponentActivity() {
                                     }
                                 }
                             },
-                            onAddBook = ::promptForEpub
+                            onAddBook = ::promptForEpub,
+                            onBookActions = { actionsForId = it.id },
+                            onSearch = { searching = true }
                         )
 
                         if (book != null) {
@@ -181,10 +229,14 @@ class MainActivity : ComponentActivity() {
                                         book = book,
                                         annotations = annotations,
                                         onBack = { opening = false },
-                                        onRead = { reading = book },
-                                        // The reader cannot take a locator yet; once it
-                                        // can, the tapped annotation is what it opens on.
-                                        onOpenAnnotation = { reading = book },
+                                        onRead = { reading = ReaderTarget(book, null) },
+                                        // The tapped annotation is what the reader opens
+                                        // on. This is the premise of the whole app: the
+                                        // index is a way back into the passage, not a
+                                        // list that merely happens to sit next to one.
+                                        onOpenAnnotation = { annotation ->
+                                            reading = ReaderTarget(book, annotation)
+                                        },
                                         onExport = { viewModel.export(book) },
                                         // Opaque, or the shelf shows through the page the
                                         // cover is lifting off.
@@ -195,6 +247,29 @@ class MainActivity : ComponentActivity() {
                                 },
                                 cover = { BookCover(book = book, modifier = Modifier.fillMaxSize()) }
                             )
+                        }
+
+                        // Drive tokens (and the consent screen behind them) outlive any
+                        // composition, so the sheet only signals intent; the activity owns
+                        // the flow, exactly as the restore-on-open path does.
+                        actionsForId?.let { id ->
+                            val target = books.firstOrNull { it.id == id }
+                            if (target == null) {
+                                actionsForId = null
+                            } else {
+                                BookActionsDialog(
+                                    book = target,
+                                    transfer = transfers[target.id],
+                                    onArchive = {
+                                        withDriveToken { token -> viewModel.archive(target, token) }
+                                    },
+                                    onRestore = {
+                                        withDriveToken { token -> viewModel.restore(target, token) }
+                                    },
+                                    onExport = { viewModel.export(target) },
+                                    onDismiss = { actionsForId = null }
+                                )
+                            }
                         }
 
                         // Over both the shelf and the index, and deliberately not
@@ -289,3 +364,12 @@ class MainActivity : ComponentActivity() {
         const val EXTRA_IMPORT_CONSUMED = "com.bookies.reader.IMPORT_CONSUMED"
     }
 }
+
+/**
+ * What the reader was opened on.
+ *
+ * A book alone is not enough: arriving from the index means arriving at one specific
+ * passage, and [openAt] is null only when the reader was entered from the top, in which
+ * case it resumes from the book's stored locator.
+ */
+private data class ReaderTarget(val book: BookEntity, val openAt: AnnotationEntity?)

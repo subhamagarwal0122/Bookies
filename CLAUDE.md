@@ -75,7 +75,7 @@ PLUGIN=/opt/homebrew/Cellar/kotlin/2.4.20/libexec/lib/kotlinx-serialization-comp
 kotlinc <files...> -Xplugin=$PLUGIN -cp "$(ls *.jar | tr '\n' ':')" -d out.jar
 ```
 
-Run the unit tests. Three suites now, and they need different classpaths — the epub
+Run the unit tests. Six suites now, and they need different classpaths — the epub
 suite grew past the original "just JUnit" invocation when `KindleClippingsTest` started
 needing the Room-annotated entities, so the `*.kt` glob no longer compiles on its own.
 `Anchor` still needs its two `@Serializable` annotations stripped into a temp copy; the
@@ -115,9 +115,46 @@ kotlinc app/src/main/java/com/bookies/reader/data/repo/OpenLibrary.kt \
         -Xplugin=$PLUGIN -cp "$JARS" -include-runtime -d ol.jar
 java -cp "ol.jar:$JARS" org.junit.runner.JUnitCore \
      com.bookies.reader.data.repo.OpenLibraryTest
+
+# Markdown export + export filenames (24 tests)
+kotlinc app/src/main/java/com/bookies/reader/export/MarkdownExporter.kt \
+        app/src/main/java/com/bookies/reader/export/ExportNaming.kt \
+        app/src/main/java/com/bookies/reader/data/db/Entities.kt \
+        app/src/main/java/com/bookies/reader/data/model/Types.kt \
+        app/src/test/java/com/bookies/reader/export/*.kt \
+        -cp "$JARS" -include-runtime -d export.jar
+java -cp "export.jar:$JARS" org.junit.runner.JUnitCore \
+     com.bookies.reader.export.ExportNamingTest \
+     com.bookies.reader.export.MarkdownExporterTest
+
+# cross-library search: FTS4 sanitising, ranking, snippets (61 tests)
+kotlinc app/src/main/java/com/bookies/reader/ui/search/SearchModel.kt \
+        app/src/main/java/com/bookies/reader/data/db/Entities.kt \
+        app/src/main/java/com/bookies/reader/data/model/Types.kt \
+        app/src/test/java/com/bookies/reader/ui/search/SearchModelTest.kt \
+        -cp "$JARS" -include-runtime -d search.jar
+java -cp "search.jar:$JARS" org.junit.runner.JUnitCore \
+     com.bookies.reader.ui.search.SearchModelTest
+
+# reader logic: passage widening, re-anchor decisions, write throttle (35 tests)
+kotlinc app/src/main/java/com/bookies/reader/epub/TextAnchoring.kt \
+        app/src/main/java/com/bookies/reader/data/db/Entities.kt \
+        app/src/main/java/com/bookies/reader/data/model/Types.kt /tmp/Anchor.kt \
+        app/src/main/java/com/bookies/reader/ui/reader/ReaderModel.kt \
+        app/src/test/java/com/bookies/reader/ui/reader/ReaderModelTest.kt \
+        -cp "$JARS" -include-runtime -d reader.jar
+java -cp "reader.jar:$JARS" org.junit.runner.JUnitCore \
+     com.bookies.reader.ui.reader.ReaderModelTest
 ```
 
-Expected: `OK (33 tests)`, `OK (17 tests)`, `OK (23 tests)` — 73 in all.
+Expected: `OK (33)`, `OK (17)`, `OK (23)`, `OK (24)`, `OK (61)`, `OK (35)` — **193 in all**.
+
+The pattern behind all six is worth stating outright, because it is what makes this
+project verifiable at all: **logic that must be correct lives in a Compose-free,
+Android-free file.** `IndexModel`, `SearchModel`, `ReaderModel` and `ExportNaming` exist
+for exactly that reason, and each has caught bugs before CI ever saw the code. When you
+add a screen, split its thinking out the same way rather than burying it in a composable
+nobody on this machine can compile.
 
 **Keep source files free of raw control bytes.** A literal NUL written into a string
 literal compiles fine and then makes the whole file binary to git, grep and diff, so it
@@ -179,11 +216,16 @@ epub/           TextAnchoring (fuzzy re-anchor), BookBundle (.bookies zip),
                 KindleClippings (My Clippings.txt parser + revision dedup)
 drive/          DriveAuth (AuthorizationClient), DriveClient (REST v3 over OkHttp),
                 ArchiveManager (archive/restore state machine)
-export/         MarkdownExporter
-ui/shelf/       ShelfScreen, ShelfViewModel, BookOpenAnimation (the hinge)
+export/         MarkdownExporter, ExportNaming (filename logic, testable),
+                ExportShare (FileProvider + ACTION_SEND)
+ui/shelf/       ShelfScreen, ShelfViewModel, BookOpenAnimation (the hinge),
+                BookActions (archive / restore / export sheet)
 ui/index/       IndexModel (all the logic, Compose-free so it is testable),
                 AnnotationIndexScreen (layout only)
-ui/reader/      ReaderScreen — THE ONE REAL STUB
+ui/search/      SearchModel (FTS4 sanitising, ranking, snippets — Compose-free),
+                SearchViewModel, SearchScreen
+ui/reader/      ReaderModel (widening, re-anchor decisions, write throttle —
+                Compose-free), ReaderViewModel, ReaderFragmentHost, ReaderScreen
 ```
 
 ## Conventions
@@ -199,52 +241,89 @@ ui/reader/      ReaderScreen — THE ONE REAL STUB
 
 ## Current state
 
-Written and verified by standalone compile + execution: schema, DAOs, anchoring (11
-tests, mutation-tested), bundle pack/unpack, Markdown export, EPUB import/OPF parsing,
-Drive client, archive/restore, physical books, the hinge animation, Kindle clippings
-import (22 tests, mutation-tested against 16 seeded mutants), the annotation index's
-logic (17 tests), and Open Library ISBN lookup (23 tests).
+**Verified by standalone compile + execution (193 tests, six suites):** schema, DAOs,
+anchoring (mutation-tested), bundle pack/unpack, Markdown export and export naming, EPUB
+import/OPF parsing, Drive client, archive/restore, physical books, the hinge animation,
+Kindle clippings import (mutation-tested against 16 seeded mutants), the annotation
+index's logic, Open Library ISBN lookup, FTS4 search sanitising and ranking
+(mutation-tested, 6 mutants), and the reader's passage widening, re-anchor decisions and
+write throttle (mutation-tested, 4 mutants).
 
 Open Library's fixtures came from its published API docs, not a live response — the
 service was unreachable when they were written, so `number_of_pages` in particular is
 worth re-checking on the first real run.
 
-**Not started:** the barcode scanner (ML Kit, needs a device), ML Kit page OCR.
-
 **Proven on a device (2026-09-20):** the app launches without crashing, Room builds its
 schema (`bookies.db` + WAL present), `Theme.kt` applies (the FAB renders spine brown, not
-Material purple), and the empty shelf state reads correctly.
+Material purple), the empty shelf state reads correctly, and an EPUB imports and appears
+on the shelf.
 
-**Written, compiles, but never exercised:** the whole shelf → hinge → index → reader flow.
-Nothing has been tapped, because no book has been imported yet. This is the single
-biggest untested area and the next thing to do.
+**`ReaderScreen` is no longer a stub.** The Readium integration is written: publication
+opening, the navigator fragment, debounced `totalProgression` writes, selection capture
+with paragraph widening, highlight decorations, and the `go()` → `TextAnchoring.resolve`
+fallback that finally gives the mutation-tested re-anchoring code a caller.
 
-**Stubbed:** `ui/reader/ReaderScreen.kt`. Its six-step sketch is verified signature by
-signature against Readium 3.0.3 (see the AAR recipe above), so what remains is Compose and
-fragment glue. `AndroidFragment` + `FragmentFactory` across configuration changes is the
-one genuinely open question.
+**Compiles in CI, never run on a device:** everything added on 2026-09-20 after the first
+device run — the reader, cross-library search, the archive/restore/export sheet, and the
+multi-file importer. None of it has been tapped. Treat all of it as unexercised.
 
-Dependency versions in `gradle/libs.versions.toml` all resolve and all build. Readium is
-pinned at 3.0.3 while 3.4.0 is current.
+**Not started:** the barcode scanner (ML Kit, needs a device), ML Kit page OCR, the
+Kindle clippings UI, the physical-books UI, the Open Library UI. Those last three are the
+odd ones: the logic is written and tested, there is simply no way into it from a screen.
 
 ## Known issues, in rough priority order
 
-1. **`InputDispatcher: Dropping untrusted touch event ... obscuring opacity = 1.00`** fires
-   repeatedly on the shelf. Android is refusing touches because something opaque covers the
-   target. Prime suspect is `BookOpenTransition`'s full-screen `leaf`, which would make
-   tapping a cover silently do nothing. Unconfirmed — needs a book on the shelf to test.
-2. **Import outcomes are swallowed.** `EpubImporter.Outcome` is discarded on both the
-   picker and intent routes, so `Failed`, `EditionConflict` and `AlreadyPresent` are
-   invisible: share a corrupt EPUB and nothing happens, with no explanation.
-3. **A failed restore leaves the cover stuck** at 0.3, because `clearTransfer` drops the
-   entry on failure as well as success. Carries its own TODO.
-4. **The status bar is illegible** — light icons over the cream background, because the
-   theme never declares its light/dark appearance.
-5. `DriveAuth.accessToken` exceptions are swallowed by a `runCatching` in MainActivity.
+Issues 1-4 of the previous list are **fixed** and are recorded under Gotchas below; do not
+re-diagnose them. What is left:
+
+1. **The reader has never been run.** `AndroidFragment` + `FragmentFactory` across a
+   configuration change is still the one genuinely open question, and it is now sharper:
+   `AndroidFragment` resolves its fragment through `fragmentManager.fragmentFactory`
+   (confirmed in bytecode), and a FragmentManager rebuilds fragments inside
+   `Activity.onCreate`, long before Compose can install a factory holding an opened
+   `Publication`. Three mitigations are in place and none is tested: `NavigatorFragments`
+   is installed before `super.onCreate` and hands back a harmless placeholder,
+   `discardRestoredNavigator()` clears a stale one, and `android:configChanges` stops the
+   activity being recreated on rotation at all. **Try rotation first.**
+2. **`createFragmentFactory(..., configuration = ...)`** — that sixth parameter name was
+   read from a deduplicated Kotlin metadata string table and could not be confirmed
+   directly. If a build fails on a named argument, this is the line.
+3. **`applyDecorations` timing.** Called from a collector in `bind()` that may fire before
+   the navigator's WebViews exist. Readium is supposed to buffer; unverified.
+4. **`chapterTitle` is not in `annotations_fts`** (only quote/note/contextBefore/After).
+   `SearchModel` gives a chapter-title match a scoring weight, but it can only lift a row
+   the database already returned — searching by chapter title alone finds nothing. Fixing
+   it means altering `AnnotationFts` plus a real migration.
+5. **`DriveAuth.accessToken` exceptions are swallowed** by a `runCatching` in MainActivity.
 6. **Drive has never been exercised end to end.** `ArchiveManager` and `DriveClient` are
    written and have never spoken to Google. Needs a Cloud project, the consent screen set
    to "In production", `drive.file` scope, and the signing key's SHA-1 registered — all
-   user tasks.
+   user tasks. There is now a UI for it (`BookActions`), so this is testable the moment
+   the Cloud side exists.
+7. **`EditionConflict` is detected and then ignored.** `EpubImporter` returns it and the
+   snackbar reports it, but nothing offers to re-attach the existing annotations, so a
+   second edition simply refuses to import.
+8. **`app/schemas/` is not committed.** KSP exports Room's schema JSON on every CI run and
+   it is thrown away, so there is no baseline to write migration tests against. Given that
+   migrations must be real, this should land before the schema changes again — and issue 4
+   would change it.
+9. **Search is capped at `LIMIT 200` before Kotlin-side filtering.** Whitespace between
+   FTS4 terms means AND under enhanced syntax and OR under standard syntax, and which one
+   a device has is not this app's decision. `SearchModel` emits whitespace only (accepted
+   by both) and then requires every term in Kotlin, so results are correct either way —
+   but under OR semantics the limit is spent on rows that are then discarded.
+   `UiState.truncated` surfaces that; the fix if it bites is a larger limit for multi-term
+   queries.
+10. **Diacritics are not folded** — "café" will not find "cafe". Consistent with FTS4's
+    simple tokenizer and therefore with the index itself, but worth knowing.
+11. **`resource.read()` pulls a whole spine item into memory** for widening and
+    re-anchoring. Fine per chapter; potentially several MB for an EPUB with no spine
+    splits.
+12. **The selection action mode is unstyled system UI.** Readium's only hook into a WebView
+    selection is `selectionActionModeCallback`, an `ActionMode.Callback`, which can hold a
+    row of words and nothing else — so a single "Annotate" item stashes the locator and the
+    real toolbar (colours, note, bookmark) is Compose. The system bar will look like
+    Android's copy/paste bar, not like Bookies.
 
 ## Gotchas already hit
 
@@ -277,3 +356,33 @@ pinned at 3.0.3 while 3.4.0 is current.
 - Google's OAuth consent screen should be set to **"In production"**, not "Testing" —
   Testing expires refresh tokens every 7 days. `drive.file` being non-sensitive means
   production needs no review.
+- **A rotated `graphicsLayer` still hit-tests as a full-size rectangle.** Compose decides
+  whether a tap landed on a composable by mapping the pointer back through the layer's
+  matrix, and with a perspective term from `cameraDistance` that inverse puts points
+  nowhere near the rotated cover back onto it. The open cover was eating every tap on the
+  index beneath it — the `obscuring opacity = 1.00` dropped-touch reports. `BookOpenTransition`
+  now drops the cover from composition entirely at progress 1. If a Compose overlay ever
+  "does nothing", check what is invisibly on top of it before checking the handler.
+- **Nested `BackHandler`s resolve by composition order**, which silently stops working
+  when the tree is rearranged. MainActivity owns exactly one, ordering its states
+  explicitly. Do not add a second anywhere; screens take an `onBack`/`onClose` callback.
+- **A SAF picker filtered on `application/epub+zip` greys out most EPUBs.** Many providers
+  report them as `application/octet-stream`, and a file that cannot be selected is
+  indistinguishable from an app that is broken. Filter wide, validate the bytes, and say
+  out loud what happened.
+- `MainActivity` is a **`FragmentActivity`**, not a `ComponentActivity`: `AndroidFragment`
+  walks up the context looking for one, and Readium's navigator is a Fragment. It also
+  installs `NavigatorFragments` as the fragment factory *before* `super.onCreate`, because
+  that is where a FragmentManager rebuilds fragments after process death and
+  `EpubNavigatorFragment` has no no-arg constructor.
+- **Readium 3.0.3 signatures the old sketch got wrong**, all found with `javap`:
+  `createFragmentFactory`'s third parameter is `initialPreferences`, not `preferences`;
+  `PublicationOpener.open`'s second positional parameter is `credentials: String?`, so
+  `allowUserInteraction` only works as a named argument; `DefaultPublicationParser`'s
+  `pdfFactory` is nullable but has **no default**, so pass `null` explicitly;
+  `EpubNavigatorFragment.Listener` is a pure marker interface and can be omitted entirely.
+- Readium's navigator pulls in `androidx.appcompat` transitively, but none of its layouts
+  or `EpubNavigatorFragment` itself reference AppCompat widgets — `Theme.Bookies` does not
+  need an AppCompat parent.
+- **FTS4 has no `bm25`** (that is FTS5, which this project cannot use). Relevance is
+  computed in Kotlin in `SearchModel`, which is also why it is testable.

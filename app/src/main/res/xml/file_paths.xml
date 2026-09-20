@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!--
+  What Bookies is willing to hand out through FileProvider, and nothing more.
+
+  Only the export scratch directory is listed. The EPUBs in filesDir and the staging
+  area an archive packs into are deliberately absent: a share sheet has no business
+  reaching a book's file, and a path declared here is reachable by any app the chooser
+  launches for as long as the grant lasts.
+-->
+<paths>
+    <cache-path name="exports" path="exports/" />
+</paths>
