@@ -37,6 +37,8 @@ curl -sSfLO $G/androidx/annotation/annotation-jvm/1.7.1/annotation-jvm-1.7.1.jar
 curl -sSfLO $M/org/jetbrains/kotlinx/kotlinx-coroutines-core-jvm/1.8.1/kotlinx-coroutines-core-jvm-1.8.1.jar
 curl -sSfLO $M/org/jetbrains/kotlinx/kotlinx-serialization-core-jvm/1.7.3/kotlinx-serialization-core-jvm-1.7.3.jar
 curl -sSfLO $M/org/jetbrains/kotlinx/kotlinx-serialization-json-jvm/1.7.3/kotlinx-serialization-json-jvm-1.7.3.jar
+curl -sSfLO $M/com/squareup/okhttp3/okhttp/4.12.0/okhttp-4.12.0.jar
+curl -sSfLO $M/com/squareup/okio/okio-jvm/3.6.0/okio-jvm-3.6.0.jar
 curl -sSfLO $M/junit/junit/4.13.2/junit-4.13.2.jar
 curl -sSfLO $M/org/hamcrest/hamcrest-core/1.3/hamcrest-core-1.3.jar
 ```
@@ -48,24 +50,53 @@ PLUGIN=/opt/homebrew/Cellar/kotlin/2.4.20/libexec/lib/kotlinx-serialization-comp
 kotlinc <files...> -Xplugin=$PLUGIN -cp "$(ls *.jar | tr '\n' ':')" -d out.jar
 ```
 
-Run the unit tests (`TextAnchoring` needs no plugin; `Anchor` only needs its two
-`@Serializable` annotations stripped into a temp copy — the annotation has no bearing on
-the logic):
+Run the unit tests. Three suites now, and they need different classpaths — the epub
+suite grew past the original "just JUnit" invocation when `KindleClippingsTest` started
+needing the Room-annotated entities, so the `*.kt` glob no longer compiles on its own.
+`Anchor` still needs its two `@Serializable` annotations stripped into a temp copy; the
+annotation has no bearing on the logic.
 
 ```bash
+JARS="$(ls *.jar | tr '\n' ':')"
 sed -e '/^import kotlinx.serialization.Serializable$/d' -e '/^@Serializable$/d' \
     app/src/main/java/com/bookies/reader/data/model/Anchor.kt > /tmp/Anchor.kt
-kotlinc app/src/main/java/com/bookies/reader/epub/TextAnchoring.kt /tmp/Anchor.kt \
+
+# epub: anchoring + Kindle clippings (33 tests)
+kotlinc app/src/main/java/com/bookies/reader/epub/TextAnchoring.kt \
+        app/src/main/java/com/bookies/reader/epub/KindleClippings.kt \
+        app/src/main/java/com/bookies/reader/data/db/Entities.kt \
+        app/src/main/java/com/bookies/reader/data/model/Types.kt /tmp/Anchor.kt \
         app/src/test/java/com/bookies/reader/epub/*.kt \
-        -cp "junit-4.13.2.jar:hamcrest-core-1.3.jar" -include-runtime -d t.jar
-java -cp "t.jar:junit-4.13.2.jar:hamcrest-core-1.3.jar" org.junit.runner.JUnitCore \
+        -cp "$JARS" -include-runtime -d epub.jar
+java -cp "epub.jar:$JARS" org.junit.runner.JUnitCore \
      com.bookies.reader.epub.TextAnchoringTest \
      com.bookies.reader.epub.AnchoringPropertyTest \
      com.bookies.reader.epub.EditionDriftTest \
-     com.bookies.reader.epub.FalsePositiveTest
+     com.bookies.reader.epub.FalsePositiveTest \
+     com.bookies.reader.epub.KindleClippingsTest
+
+# annotation index logic (17 tests)
+kotlinc app/src/main/java/com/bookies/reader/ui/index/IndexModel.kt \
+        app/src/main/java/com/bookies/reader/data/db/Entities.kt \
+        app/src/main/java/com/bookies/reader/data/model/Types.kt \
+        app/src/test/java/com/bookies/reader/ui/index/IndexModelTest.kt \
+        -cp "$JARS" -include-runtime -d index.jar
+java -cp "index.jar:$JARS" org.junit.runner.JUnitCore \
+     com.bookies.reader.ui.index.IndexModelTest
+
+# Open Library lookup (23 tests) — needs the serialization plugin
+kotlinc app/src/main/java/com/bookies/reader/data/repo/OpenLibrary.kt \
+        app/src/test/java/com/bookies/reader/data/repo/OpenLibraryTest.kt \
+        -Xplugin=$PLUGIN -cp "$JARS" -include-runtime -d ol.jar
+java -cp "ol.jar:$JARS" org.junit.runner.JUnitCore \
+     com.bookies.reader.data.repo.OpenLibraryTest
 ```
 
-Expected: `OK (11 tests)`.
+Expected: `OK (33 tests)`, `OK (17 tests)`, `OK (23 tests)` — 73 in all.
+
+**Keep source files free of raw control bytes.** A literal NUL written into a string
+literal compiles fine and then makes the whole file binary to git, grep and diff, so it
+silently drops out of code review. Write `"\u0000"`, not the byte.
 
 ### Reading an Android-only API without the SDK
 
@@ -140,11 +171,21 @@ ui/reader/      ReaderScreen — THE ONE REAL STUB
 ## Current state
 
 Written and verified by standalone compile + execution: schema, DAOs, anchoring (11
-tests passing, mutation-tested), bundle pack/unpack, Markdown export, EPUB import/OPF
-parsing, Drive client, archive/restore, physical books, the hinge animation.
+tests, mutation-tested), bundle pack/unpack, Markdown export, EPUB import/OPF parsing,
+Drive client, archive/restore, physical books, the hinge animation, Kindle clippings
+import (22 tests, mutation-tested against 16 seeded mutants), the annotation index's
+logic (17 tests), and Open Library ISBN lookup (23 tests).
 
-**Not started:** annotation index screen (what the cover opens onto), barcode scan +
-Open Library lookup, ML Kit page OCR, Kindle `My Clippings.txt` import.
+Open Library's fixtures came from its published API docs, not a live response — the
+service was unreachable when they were written, so `number_of_pages` in particular is
+worth re-checking on the first real run.
+
+**Not started:** the barcode scanner itself (ML Kit, needs a device), ML Kit page OCR.
+
+**Written but never compiled by a real Android build:** the annotation index screen and
+the shelf/hinge/index/reader navigation. Their Compose layers are unverified — only CI
+can check those. The logic under both was deliberately kept Compose-free so it could be
+tested here; see `ui/index/IndexModel.kt`.
 
 **Stubbed:** `ui/reader/ReaderScreen.kt` — the Readium navigator. Its six-step sketch has
 now been **verified signature by signature against Readium 3.0.3** (see the AAR recipe
