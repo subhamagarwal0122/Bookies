@@ -41,6 +41,7 @@ import androidx.compose.ui.unit.sp
 import com.bookies.reader.data.db.AnnotationEntity
 import com.bookies.reader.data.db.BookEntity
 import com.bookies.reader.data.model.AnnotationType
+import com.bookies.reader.data.model.BookFormat
 import java.util.Locale
 
 
@@ -57,6 +58,7 @@ fun AnnotationIndexScreen(
     book: BookEntity,
     annotations: List<AnnotationEntity>,
     onBack: () -> Unit,
+    onRead: () -> Unit,
     onOpenAnnotation: (AnnotationEntity) -> Unit,
     onExport: () -> Unit,
     modifier: Modifier = Modifier
@@ -71,7 +73,12 @@ fun AnnotationIndexScreen(
     }
 
     Column(modifier.fillMaxSize()) {
-        IndexHeader(book = book, annotationCount = annotations.size, onBack = onBack)
+        IndexHeader(
+            book = book,
+            annotationCount = annotations.size,
+            onBack = onBack,
+            onRead = onRead
+        )
 
         ToolsRow(
             query = query,
@@ -100,18 +107,35 @@ fun AnnotationIndexScreen(
 private fun IndexHeader(
     book: BookEntity,
     annotationCount: Int,
-    onBack: () -> Unit
+    onBack: () -> Unit,
+    onRead: () -> Unit
 ) {
     Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp)) {
-        Text(
-            text = "←  Shelf",
-            style = MaterialTheme.typography.labelLarge,
-            color = MaterialTheme.colorScheme.primary,
-            modifier = Modifier
-                .clip(RoundedCornerShape(4.dp))
-                .clickable(onClick = onBack)
-                .padding(vertical = 6.dp)
-        )
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Text(
+                text = "←  Shelf",
+                style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary,
+                modifier = Modifier
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable(onClick = onBack)
+                    .padding(vertical = 6.dp)
+            )
+
+            Spacer(Modifier.weight(1f))
+
+            // The index is a way back into the text, but until now the only door was an
+            // annotation — and annotations can only be made from inside the reader. A
+            // freshly imported book was therefore unopenable. This is that door.
+            if (book.format == BookFormat.EPUB) {
+                TextButton(onClick = onRead) {
+                    Text(
+                        text = if (book.progression > 0.0) "Continue" else "Read",
+                        style = MaterialTheme.typography.labelLarge
+                    )
+                }
+            }
+        }
 
         Spacer(Modifier.height(12.dp))
 

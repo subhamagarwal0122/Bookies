@@ -49,30 +49,38 @@ fun BookOpenTransition(
 
         // Stop short of a full 180°: a cover laid perfectly flat loses all sense of
         // depth, and the slight residual angle keeps the spine readable.
-        val angle = -170f * progress.coerceIn(0f, 1f)
+        val clamped = progress.coerceIn(0f, 1f)
+        val angle = -170f * clamped
         val showingBack = progress > 0.5f
 
-        Box(
-            Modifier
-                .fillMaxSize()
-                .graphicsLayer {
-                    transformOrigin = TransformOrigin(0f, 0.5f)
-                    rotationY = angle
-                    cameraDistance = 8f * density
-                }
-                // The page beneath should darken slightly while the cover shades it.
-                .drawWithContent {
-                    drawContent()
-                    if (!showingBack) {
-                        drawRect(Color.Black.copy(alpha = 0.25f * progress))
+        // Leave composition entirely once the cover is open. It is a full-screen Box, and
+        // Compose maps a touch back through the graphicsLayer matrix to decide whether it
+        // landed on it — a matrix with a perspective term, which is enough to have the
+        // open cover swallow taps meant for the index underneath it. Nothing is visible
+        // here at progress 1 anyway, so the cheapest correct answer is not to be there.
+        if (clamped < 1f) {
+            Box(
+                Modifier
+                    .fillMaxSize()
+                    .graphicsLayer {
+                        transformOrigin = TransformOrigin(0f, 0.5f)
+                        rotationY = angle
+                        cameraDistance = 8f * density
                     }
+                    // The page beneath should darken slightly while the cover shades it.
+                    .drawWithContent {
+                        drawContent()
+                        if (!showingBack) {
+                            drawRect(Color.Black.copy(alpha = 0.25f * progress))
+                        }
+                    }
+            ) {
+                if (showingBack) {
+                    // Counter-flip so the endpaper is not mirrored.
+                    Box(Modifier.fillMaxSize().graphicsLayer { rotationY = 180f }) { endpaper() }
+                } else {
+                    cover()
                 }
-        ) {
-            if (showingBack) {
-                // Counter-flip so the endpaper is not mirrored.
-                Box(Modifier.fillMaxSize().graphicsLayer { rotationY = 180f }) { endpaper() }
-            } else {
-                cover()
             }
         }
     }
