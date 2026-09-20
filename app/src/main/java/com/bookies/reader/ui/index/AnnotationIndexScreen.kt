@@ -62,10 +62,15 @@ fun AnnotationIndexScreen(
     onRead: () -> Unit,
     onOpenAnnotation: (AnnotationEntity) -> Unit,
     onExport: () -> Unit,
+    onAddNote: (quote: String, note: String?, pageNumber: Int?) -> Unit,
     modifier: Modifier = Modifier
 ) {
     var query by remember { mutableStateOf("") }
     var filter by remember { mutableStateOf(IndexFilter.ALL) }
+
+    // Keyed on the book: reopening the index on a different cover must not inherit a
+    // half-written passage from the last one.
+    var writingNote by remember(book.id) { mutableStateOf(false) }
 
     // Sorting and grouping are O(n log n) over the whole book; keyed so a keystroke that
     // changes nothing about the inputs does not redo it.
@@ -81,7 +86,8 @@ fun AnnotationIndexScreen(
             book = book,
             annotationCount = annotations.size,
             onBack = onBack,
-            onRead = onRead
+            onRead = onRead,
+            onAddNote = { writingNote = true }
         )
 
         ToolsRow(
@@ -103,6 +109,14 @@ fun AnnotationIndexScreen(
             AnnotationList(groups = groups, onOpenAnnotation = onOpenAnnotation)
         }
     }
+
+    if (writingNote) {
+        PaperNoteDialog(
+            pageCount = book.pageCount,
+            onSave = onAddNote,
+            onDismiss = { writingNote = false }
+        )
+    }
 }
 
 // --- header ---------------------------------------------------------------------------
@@ -112,7 +126,8 @@ private fun IndexHeader(
     book: BookEntity,
     annotationCount: Int,
     onBack: () -> Unit,
-    onRead: () -> Unit
+    onRead: () -> Unit,
+    onAddNote: () -> Unit
 ) {
     Column(Modifier.padding(start = 20.dp, end = 20.dp, top = 20.dp)) {
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -137,6 +152,13 @@ private fun IndexHeader(
                         text = if (book.progression > 0.0) "Continue" else "Read",
                         style = MaterialTheme.typography.labelLarge
                     )
+                }
+            } else {
+                // A paper book has nothing to open, so the slot the reader button occupies
+                // holds the equivalent door: on paper the passage is written down rather
+                // than selected, and without this a physical book's index can never fill.
+                TextButton(onClick = onAddNote) {
+                    Text(text = "Add note", style = MaterialTheme.typography.labelLarge)
                 }
             }
         }

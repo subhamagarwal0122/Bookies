@@ -72,6 +72,15 @@ class ShelfViewModel(private val app: BookiesApp) : ViewModel() {
     }
 
     /**
+     * A paper book has landed on the shelf. Reported here rather than from the add dialog
+     * because the dialog closes on success, and a confirmation that vanishes with the
+     * thing confirming it is no confirmation at all.
+     */
+    fun bookAdded(title: String) {
+        _message.value = "Added “$title”"
+    }
+
+    /**
      * Imports one or more picked EPUBs, sequentially so two imports cannot race on the
      * same hash. Every outcome is reported; a batch reports only the last one plus a
      * count, because a snackbar is not a log.
@@ -123,6 +132,30 @@ class ShelfViewModel(private val app: BookiesApp) : ViewModel() {
     fun exportHandled(error: String? = null) {
         _pendingExport.value = null
         if (error != null) _message.value = error
+    }
+
+    /**
+     * Writes down a passage from a paper book.
+     *
+     * Goes through `PhysicalBooks` rather than straight to the DAO because that is where
+     * the page number becomes a progression. After this call the row is indistinguishable
+     * from one made by selecting text in the reader, which is the entire point.
+     */
+    fun addNote(
+        book: BookEntity,
+        quote: String,
+        note: String?,
+        pageNumber: Int?
+    ) = viewModelScope.launch {
+        app.physicalBooks.annotate(
+            book = book,
+            quote = quote,
+            pageNumber = pageNumber,
+            note = note
+        )
+        // Said out loud because the index sorts by position, so a note without a page
+        // number lands at the top rather than at the bottom where it was just written.
+        _message.value = if (pageNumber != null) "Noted on p. $pageNumber" else "Noted"
     }
 
     /** Per-book transfer progress, keyed by book id, so the shelf can show it inline. */

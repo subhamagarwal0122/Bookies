@@ -2,7 +2,10 @@ package com.bookies.reader
 
 import android.app.Application
 import com.bookies.reader.data.db.BookiesDatabase
+import com.bookies.reader.data.repo.CoverFetcher
 import com.bookies.reader.data.repo.FileStore
+import com.bookies.reader.data.repo.OpenLibrary
+import com.bookies.reader.data.repo.PhysicalBooks
 import com.bookies.reader.drive.ArchiveManager
 import com.bookies.reader.drive.DriveAuth
 import com.bookies.reader.drive.DriveClient
@@ -24,6 +27,13 @@ class BookiesApp : Application() {
     val files by lazy { FileStore(this) }
     val driveAuth by lazy { DriveAuth(this) }
     val importer by lazy { EpubImporter(database.books(), files) }
+
+    // The paper half of the shelf. PhysicalBooks writes into the same two tables the
+    // importer does — deliberately, and see invariant 4: nothing downstream branches on
+    // format once a page number has become a progression.
+    val physicalBooks by lazy { PhysicalBooks(database.books(), database.annotations()) }
+    val openLibrary by lazy { OpenLibrary() }
+    val covers by lazy { CoverFetcher(files) }
     val archiveManager by lazy {
         ArchiveManager(database.books(), database.annotations(), files, DriveClient())
     }

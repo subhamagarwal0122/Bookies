@@ -33,6 +33,9 @@ import androidx.lifecycle.viewmodel.compose.viewModel
 import com.bookies.reader.data.db.AnnotationEntity
 import com.bookies.reader.data.db.BookEntity
 import com.bookies.reader.data.model.StorageState
+import com.bookies.reader.scan.IsbnScanner
+import com.bookies.reader.ui.add.AddBookDialog
+import com.bookies.reader.ui.add.AddSourceDialog
 import com.bookies.reader.ui.index.AnnotationIndexScreen
 import com.bookies.reader.ui.reader.NavigatorFragments
 import com.bookies.reader.ui.reader.ReaderScreen
@@ -133,6 +136,12 @@ class MainActivity : FragmentActivity() {
                 var actionsForId by remember { mutableStateOf<String?>(null) }
                 var searching by remember { mutableStateOf(false) }
 
+                // The "+" fork, and the paper flow behind it. Both are dialogs, which take
+                // back through their own dismiss — deliberately, so that neither has to
+                // join the single BackHandler's ordering below.
+                var choosingSource by remember { mutableStateOf(false) }
+                var addingPaper by remember { mutableStateOf(false) }
+
                 // Re-read the row from the shelf flow each recomposition: a restore
                 // rewrites storageState, and a stale copy would leave the cover held
                 // part-open forever.
@@ -192,7 +201,7 @@ class MainActivity : FragmentActivity() {
                                     }
                                 }
                             },
-                            onAddBook = ::promptForEpub,
+                            onAddBook = { choosingSource = true },
                             onBookActions = { actionsForId = it.id },
                             onSearch = { searching = true }
                         )
@@ -238,6 +247,9 @@ class MainActivity : FragmentActivity() {
                                             reading = ReaderTarget(book, annotation)
                                         },
                                         onExport = { viewModel.export(book) },
+                                        onAddNote = { quote, note, page ->
+                                            viewModel.addNote(book, quote, note, page)
+                                        },
                                         // Opaque, or the shelf shows through the page the
                                         // cover is lifting off.
                                         modifier = Modifier
@@ -246,6 +258,35 @@ class MainActivity : FragmentActivity() {
                                     )
                                 },
                                 cover = { BookCover(book = book, modifier = Modifier.fillMaxSize()) }
+                            )
+                        }
+
+                        if (choosingSource) {
+                            AddSourceDialog(
+                                onPickEpub = {
+                                    choosingSource = false
+                                    promptForEpub()
+                                },
+                                onAddPaper = {
+                                    choosingSource = false
+                                    addingPaper = true
+                                },
+                                onDismiss = { choosingSource = false }
+                            )
+                        }
+
+                        if (addingPaper) {
+                            AddBookDialog(
+                                // The scanner is Play services' own activity, so the flow
+                                // outlives this composition exactly as the Drive consent
+                                // screen does. The activity launches it; the ViewModel
+                                // behind the dialog survives to receive the answer.
+                                onScan = ::scanIsbn,
+                                onAdded = { title ->
+                                    addingPaper = false
+                                    viewModel.bookAdded(title)
+                                },
+                                onDismiss = { addingPaper = false }
                             )
                         }
 
@@ -314,6 +355,13 @@ class MainActivity : FragmentActivity() {
     }
 
     fun promptForEpub() = pickEpubs.launch(arrayOf("*/*"))
+
+    /**
+     * Reads a book's barcode. No permission is requested and no camera is opened by this
+     * app: Play services runs the scan in an activity of its own and hands back a string.
+     */
+    private fun scanIsbn(onResult: (IsbnScanner.Outcome) -> Unit) =
+        IsbnScanner.scan(this, onResult)
 
     /**
      * The "open with" and share-sheet routes.

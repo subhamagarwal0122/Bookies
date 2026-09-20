@@ -75,7 +75,7 @@ PLUGIN=/opt/homebrew/Cellar/kotlin/2.4.20/libexec/lib/kotlinx-serialization-comp
 kotlinc <files...> -Xplugin=$PLUGIN -cp "$(ls *.jar | tr '\n' ':')" -d out.jar
 ```
 
-Run the unit tests. Six suites now, and they need different classpaths — the epub
+Run the unit tests. Six suites, and they need different classpaths — the epub
 suite grew past the original "just JUnit" invocation when `KindleClippingsTest` started
 needing the Room-annotated entities, so the `*.kt` glob no longer compiles on its own.
 `Anchor` still needs its two `@Serializable` annotations stripped into a temp copy; the
@@ -100,21 +100,27 @@ java -cp "epub.jar:$JARS" org.junit.runner.JUnitCore \
      com.bookies.reader.epub.FalsePositiveTest \
      com.bookies.reader.epub.KindleClippingsTest
 
-# annotation index logic (17 tests)
+# annotation index logic + paper-note validation (34 tests)
 kotlinc app/src/main/java/com/bookies/reader/ui/index/IndexModel.kt \
+        app/src/main/java/com/bookies/reader/ui/index/PaperNote.kt \
         app/src/main/java/com/bookies/reader/data/db/Entities.kt \
         app/src/main/java/com/bookies/reader/data/model/Types.kt \
         app/src/test/java/com/bookies/reader/ui/index/IndexModelTest.kt \
+        app/src/test/java/com/bookies/reader/ui/index/PaperNoteTest.kt \
         -cp "$JARS" -include-runtime -d index.jar
 java -cp "index.jar:$JARS" org.junit.runner.JUnitCore \
-     com.bookies.reader.ui.index.IndexModelTest
+     com.bookies.reader.ui.index.IndexModelTest \
+     com.bookies.reader.ui.index.PaperNoteTest
 
-# Open Library lookup (23 tests) — needs the serialization plugin
+# Open Library lookup + the add-a-paper-book flow (53 tests) — needs the serialization plugin
 kotlinc app/src/main/java/com/bookies/reader/data/repo/OpenLibrary.kt \
+        app/src/main/java/com/bookies/reader/ui/add/AddBookModel.kt \
         app/src/test/java/com/bookies/reader/data/repo/OpenLibraryTest.kt \
+        app/src/test/java/com/bookies/reader/ui/add/AddBookModelTest.kt \
         -Xplugin=$PLUGIN -cp "$JARS" -include-runtime -d ol.jar
 java -cp "ol.jar:$JARS" org.junit.runner.JUnitCore \
-     com.bookies.reader.data.repo.OpenLibraryTest
+     com.bookies.reader.data.repo.OpenLibraryTest \
+     com.bookies.reader.ui.add.AddBookModelTest
 
 # Markdown export + export filenames (24 tests)
 kotlinc app/src/main/java/com/bookies/reader/export/MarkdownExporter.kt \
@@ -147,12 +153,12 @@ java -cp "reader.jar:$JARS" org.junit.runner.JUnitCore \
      com.bookies.reader.ui.reader.ReaderModelTest
 ```
 
-Expected: `OK (33)`, `OK (17)`, `OK (23)`, `OK (24)`, `OK (61)`, `OK (35)` — **193 in all**.
+Expected: `OK (33)`, `OK (34)`, `OK (53)`, `OK (24)`, `OK (61)`, `OK (35)` — **240 in all**.
 
 The pattern behind all six is worth stating outright, because it is what makes this
 project verifiable at all: **logic that must be correct lives in a Compose-free,
-Android-free file.** `IndexModel`, `SearchModel`, `ReaderModel` and `ExportNaming` exist
-for exactly that reason, and each has caught bugs before CI ever saw the code. When you
+Android-free file.** `IndexModel`, `SearchModel`, `ReaderModel`, `ExportNaming`,
+`AddBookModel` and `PaperNote` exist for exactly that reason, and each has caught bugs before CI ever saw the code. When you
 add a screen, split its thinking out the same way rather than burying it in a composable
 nobody on this machine can compile.
 
@@ -190,17 +196,17 @@ Compose, Android framework classes or Readium cannot be compiled here at all.
    exactly 0 and is mutation-tested — three seeded mutants (offset off-by-one, threshold
    at 0.0, single-probe fuzzy) are all caught. If you "simplify" the multi-probe logic in
    `fuzzy()`, `EditionDriftTest` will fail; that is deliberate.
-3. **`drive.file` scope only.** Never widen to `drive` or `drive.readonly` — those are
+4. **`drive.file` scope only.** Never widen to `drive` or `drive.readonly` — those are
    sensitive scopes requiring a multi-week Google verification review, and `drive.file`
    already does everything needed. It also means the app provably cannot read the rest of
    the user's Drive.
-4. **Physical and digital books share one table.** `PhysicalBooks.progressionFor` turns a
+5. **Physical and digital books share one table.** `PhysicalBooks.progressionFor` turns a
    page number into the same 0.0–1.0 progression an EPUB annotation carries. Never branch
    on `BookFormat` downstream of that conversion — the point is that ordering, search,
    the index screen and export cannot tell them apart.
-5. **Tombstones, never hard deletes.** `deletedAt` on books and annotations, so a future
+6. **Tombstones, never hard deletes.** `deletedAt` on books and annotations, so a future
    sync can propagate removals.
-6. **Annotations stay on the device when a book is archived.** ~2 KB each; keeping them
+7. **Annotations stay on the device when a book is archived.** ~2 KB each; keeping them
    is what makes one search index span the whole library rather than only what is
    currently on the phone. A copy also goes in the bundle.
 
@@ -214,14 +220,19 @@ data/repo/      FileStore (app-private paths, SHA-256), PhysicalBooks,
 epub/           TextAnchoring (fuzzy re-anchor), BookBundle (.bookies zip),
                 BundleFormat (on-disk contract), EpubImporter (hand-rolled OPF parser),
                 KindleClippings (My Clippings.txt parser + revision dedup)
+scan/           IsbnScanner (Play services' code scanner; no CAMERA permission)
 drive/          DriveAuth (AuthorizationClient), DriveClient (REST v3 over OkHttp),
                 ArchiveManager (archive/restore state machine)
 export/         MarkdownExporter, ExportNaming (filename logic, testable),
                 ExportShare (FileProvider + ACTION_SEND)
+ui/add/         AddBookModel (ISBN field, lookup outcomes, hand-entry validation —
+                Compose-free), AddBookViewModel, AddBookScreen (the "+" fork and the
+                three-faced paper-book dialog)
 ui/shelf/       ShelfScreen, ShelfViewModel, BookOpenAnimation (the hinge),
                 BookActions (archive / restore / export sheet)
 ui/index/       IndexModel (all the logic, Compose-free so it is testable),
-                AnnotationIndexScreen (layout only)
+                PaperNote (page/quote validation for paper annotations, Compose-free),
+                AnnotationIndexScreen (layout only), PaperNoteDialog
 ui/search/      SearchModel (FTS4 sanitising, ranking, snippets — Compose-free),
                 SearchViewModel, SearchScreen
 ui/reader/      ReaderModel (widening, re-anchor decisions, write throttle —
@@ -241,13 +252,14 @@ ui/reader/      ReaderModel (widening, re-anchor decisions, write throttle —
 
 ## Current state
 
-**Verified by standalone compile + execution (193 tests, six suites):** schema, DAOs,
+**Verified by standalone compile + execution (240 tests, six suites):** schema, DAOs,
 anchoring (mutation-tested), bundle pack/unpack, Markdown export and export naming, EPUB
 import/OPF parsing, Drive client, archive/restore, physical books, the hinge animation,
 Kindle clippings import (mutation-tested against 16 seeded mutants), the annotation
 index's logic, Open Library ISBN lookup, FTS4 search sanitising and ranking
-(mutation-tested, 6 mutants), and the reader's passage widening, re-anchor decisions and
-write throttle (mutation-tested, 4 mutants).
+(mutation-tested, 6 mutants), the reader's passage widening, re-anchor decisions and
+write throttle (mutation-tested, 4 mutants), the add-a-paper-book flow's ISBN field,
+lookup outcomes and hand-entry validation, and paper-annotation validation.
 
 Open Library's fixtures came from its published API docs, not a live response — the
 service was unreachable when they were written, so `number_of_pages` in particular is
@@ -273,16 +285,31 @@ fallback that finally gives the mutation-tested re-anchoring code a caller.
 device run — the reader, cross-library search, the archive/restore/export sheet, and the
 multi-file importer. None of it has been tapped. Treat all of it as unexercised.
 
-**Not started:** the barcode scanner (ML Kit, needs a device), ML Kit page OCR, the
-Kindle clippings UI, the physical-books UI, the Open Library UI. Those last three are the
-odd ones: the logic is written and tested, there is simply no way into it from a screen.
+**Paper books are reachable (2026-09-21, never run).** The "+" button now forks: an EPUB,
+or a paper book. The paper route scans the barcode with Play services' code scanner —
+which means **no `CAMERA` permission and no CameraX**, because the scan happens inside
+Play services' own activity — resolves the ISBN against Open Library, and offers the match
+for confirmation. Every failure (bad checksum, unknown ISBN, unreachable service, scanner
+module still downloading) lands on hand entry rather than a dead end. A physical book's
+index gets an "Add note" button where an EPUB's gets "Read", and what it writes goes
+through `PhysicalBooks.annotate`, so the row is indistinguishable from a reader highlight.
+
+**Not started:** ML Kit page OCR, the Kindle clippings UI.
 
 ## Known issues, in rough priority order
 
 Issues 1-4 of the previous list are **fixed** and are recorded under Gotchas below; do not
 re-diagnose them. What is left:
 
-1. **The reader has never been run.** `AndroidFragment` + `FragmentFactory` across a
+1. **Nothing in the paper-book flow has been run**, including the scanner. The parts that
+   need a device are the scanner itself (Play services must be present and the
+   `barcode_ui` module downloaded — the manifest asks for it at install, but that has
+   never been observed working) and `CoverFetcher`, whose only test is that a failure is
+   survivable. The lookup, the field and the validation are all tested on the JVM.
+   Open Library's `number_of_pages` is still unverified against a live response, and it is
+   now load-bearing: it is the denominator under every paper annotation's progression.
+
+2. **The reader has never been run.** `AndroidFragment` + `FragmentFactory` across a
    configuration change is still the one genuinely open question, and it is now sharper:
    `AndroidFragment` resolves its fragment through `fragmentManager.fragmentFactory`
    (confirmed in bytecode), and a FragmentManager rebuilds fragments inside
@@ -291,41 +318,41 @@ re-diagnose them. What is left:
    is installed before `super.onCreate` and hands back a harmless placeholder,
    `discardRestoredNavigator()` clears a stale one, and `android:configChanges` stops the
    activity being recreated on rotation at all. **Try rotation first.**
-2. **`createFragmentFactory(..., configuration = ...)`** — that sixth parameter name was
+3. **`createFragmentFactory(..., configuration = ...)`** — that sixth parameter name was
    read from a deduplicated Kotlin metadata string table and could not be confirmed
    directly. If a build fails on a named argument, this is the line.
-3. **`applyDecorations` timing.** Called from a collector in `bind()` that may fire before
+4. **`applyDecorations` timing.** Called from a collector in `bind()` that may fire before
    the navigator's WebViews exist. Readium is supposed to buffer; unverified.
-4. **`chapterTitle` is not in `annotations_fts`** (only quote/note/contextBefore/After).
+5. **`chapterTitle` is not in `annotations_fts`** (only quote/note/contextBefore/After).
    `SearchModel` gives a chapter-title match a scoring weight, but it can only lift a row
    the database already returned — searching by chapter title alone finds nothing. Fixing
    it means altering `AnnotationFts` plus a real migration.
-5. **`DriveAuth.accessToken` exceptions are swallowed** by a `runCatching` in MainActivity.
-6. **Drive has never been exercised end to end.** `ArchiveManager` and `DriveClient` are
+6. **`DriveAuth.accessToken` exceptions are swallowed** by a `runCatching` in MainActivity.
+7. **Drive has never been exercised end to end.** `ArchiveManager` and `DriveClient` are
    written and have never spoken to Google. Needs a Cloud project, the consent screen set
    to "In production", `drive.file` scope, and the signing key's SHA-1 registered — all
    user tasks. There is now a UI for it (`BookActions`), so this is testable the moment
    the Cloud side exists.
-7. **`EditionConflict` is detected and then ignored.** `EpubImporter` returns it and the
+8. **`EditionConflict` is detected and then ignored.** `EpubImporter` returns it and the
    snackbar reports it, but nothing offers to re-attach the existing annotations, so a
    second edition simply refuses to import.
-8. **`app/schemas/` is not committed.** KSP exports Room's schema JSON on every CI run and
+9. **`app/schemas/` is not committed.** KSP exports Room's schema JSON on every CI run and
    it is thrown away, so there is no baseline to write migration tests against. Given that
-   migrations must be real, this should land before the schema changes again — and issue 4
+   migrations must be real, this should land before the schema changes again — and issue 5
    would change it.
-9. **Search is capped at `LIMIT 200` before Kotlin-side filtering.** Whitespace between
+10. **Search is capped at `LIMIT 200` before Kotlin-side filtering.** Whitespace between
    FTS4 terms means AND under enhanced syntax and OR under standard syntax, and which one
    a device has is not this app's decision. `SearchModel` emits whitespace only (accepted
    by both) and then requires every term in Kotlin, so results are correct either way —
    but under OR semantics the limit is spent on rows that are then discarded.
    `UiState.truncated` surfaces that; the fix if it bites is a larger limit for multi-term
    queries.
-10. **Diacritics are not folded** — "café" will not find "cafe". Consistent with FTS4's
+11. **Diacritics are not folded** — "café" will not find "cafe". Consistent with FTS4's
     simple tokenizer and therefore with the index itself, but worth knowing.
-11. **`resource.read()` pulls a whole spine item into memory** for widening and
+12. **`resource.read()` pulls a whole spine item into memory** for widening and
     re-anchoring. Fine per chapter; potentially several MB for an EPUB with no spine
     splits.
-12. **The selection action mode is unstyled system UI.** Readium's only hook into a WebView
+13. **The selection action mode is unstyled system UI.** Readium's only hook into a WebView
     selection is `selectionActionModeCallback`, an `ActionMode.Callback`, which can hold a
     row of words and nothing else — so a single "Annotate" item stashes the locator and the
     real toolbar (colours, note, bookmark) is Compose. The system bar will look like
@@ -405,5 +432,17 @@ re-diagnose them. What is left:
   pass `scroll = true`. The navigator hierarchy is a scrollable `ViewPager` over a
   `WebView` that reports `scrollable=false`, which is the quickest way to confirm which
   mode you are in from `uiautomator dump`.
+- **Play services' code scanner cancels by *failing*.** `GmsBarcodeScanner.startScan()`
+  returns a `Task<Barcode>`, and backing out of the scanner arrives as
+  `addOnFailureListener` with `MlKitException.CODE_SCANNER_CANCELLED`, not as
+  `addOnCanceledListener`. Handle both or a cancelled scan looks like a crash to the UI.
+  Confirmed by `javap` against `play-services-code-scanner-16.1.0`, where the whole public
+  API is three classes: `GmsBarcodeScanning`, `GmsBarcodeScanner`, `GmsBarcodeScannerOptions`.
+- **The code scanner needs no `CAMERA` permission**, and adding one would be a mistake:
+  the scan runs in `GmsBarcodeScanningDelegateActivity` inside Play services, so it is
+  Play services that holds the camera. Its own manifest declares that activity; ours
+  declares nothing but the `com.google.mlkit.vision.DEPENDENCIES` = `barcode_ui` meta-data
+  that pre-downloads the module. The first scan before that download completes fails with
+  `CODE_SCANNER_UNAVAILABLE`.
 - **FTS4 has no `bm25`** (that is FTS5, which this project cannot use). Relevance is
   computed in Kotlin in `SearchModel`, which is also why it is testable.

@@ -18,6 +18,17 @@
         android:supportsRtl="true"
         android:theme="@style/Theme.Bookies">
 
+        <!--
+          Asks Play services to fetch the barcode-scanning module when Bookies is
+          installed rather than on the first scan. Without it the first attempt to scan a
+          book fails with CODE_SCANNER_UNAVAILABLE while the module downloads, which looks
+          exactly like a broken feature. Nothing here requests the CAMERA permission: the
+          scan runs inside Play services' own activity, not in this app.
+        -->
+        <meta-data
+            android:name="com.google.mlkit.vision.DEPENDENCIES"
+            android:value="barcode_ui" />
+
         <activity
             android:name=".MainActivity"
             android:exported="true"

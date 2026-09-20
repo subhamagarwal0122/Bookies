@@ -80,6 +80,7 @@ dependencies {
     implementation(libs.androidx.credentials.play.services)
     implementation(libs.googleid)
     implementation(libs.play.services.auth)   // AuthorizationClient, for the drive.file scope
+    implementation(libs.play.services.code.scanner)  // ISBN barcodes, for paper books
 
     implementation(libs.readium.shared)
     implementation(libs.readium.streamer)
