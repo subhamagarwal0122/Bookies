@@ -265,7 +265,14 @@ class OpenLibraryTest {
         val boom = IOException("Open Library lookup failed: 503")
         val result = OpenLibrary(OpenLibrary.Fetcher { throw boom }).lookup(isbn13)
         assertTrue("expected Error, got $result", result is OpenLibrary.Result.Error)
-        assertEquals(boom, (result as OpenLibrary.Result.Error).cause)
+        // Not assertEquals(boom, cause): the exception crosses a withContext boundary, and
+        // kotlinx-coroutines' stack-trace recovery hands back a *copy* carrying the original
+        // as its own cause. Identity here passes under a plain kotlinc run and fails under
+        // Gradle. What matters is that the transport failure arrives identifiable, so assert
+        // on type and message instead.
+        val cause = (result as OpenLibrary.Result.Error).cause
+        assertTrue("expected an IOException, got $cause", cause is IOException)
+        assertEquals(boom.message, cause?.message)
     }
 
     @Test
