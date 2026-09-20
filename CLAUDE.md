@@ -10,16 +10,41 @@ Personal app for one reader — the user is building it for a friend. **No Play 
 
 ## Build situation — read this first
 
-**There is no Android SDK, no Android Studio and no Gradle on this machine.** System JDK
-is 24, which AGP does not support. You therefore **cannot run `./gradlew` anything**.
-Do not try to install the SDK; a working setup is ~12-14 GB (Studio, SDK, an emulator
-image, Gradle caches) on a volume with ~14 GB free as of 2026-09-20, and it is the
-user's call.
+**The app builds, and it runs.** As of 2026-09-20 CI is green, there is a working APK,
+and it has been installed and launched on an emulator.
 
-There is also no Gradle wrapper committed — Android Studio generates it on first open.
-**`.github/workflows/build.yml` is the real compiler**: it installs Gradle 8.9 itself
-(so the missing wrapper does not matter), runs KSP, compiles Compose and uploads a debug
-APK. Anything that cannot be checked locally gets checked by pushing.
+Still true: there is **no Android SDK for building, no Android Studio and no Gradle** on
+this machine, and the system JDK is 24, which AGP does not support. You **cannot run
+`./gradlew` anything**, and there is no wrapper committed.
+
+**`.github/workflows/build.yml` is the compiler.** It installs Gradle 8.9 itself, so the
+missing wrapper does not matter, then runs KSP (the only thing that validates Room's
+`@Query` SQL), compiles Compose, runs the unit tests and uploads a debug APK. Anything
+that cannot be checked locally gets checked by pushing. Watch a run with
+`gh run watch <id> --exit-status`; read a failure with `gh run view <id> --log-failed`.
+
+### Running it — the emulator
+
+Installed and working. Deliberately *not* Android Studio: because CI does the building,
+only the runtime half is needed, which is ~2.3 GB rather than ~12 GB.
+
+```bash
+export ANDROID_HOME=/opt/homebrew/share/android-commandlinetools
+$ANDROID_HOME/emulator/emulator -avd bookies        # Pixel 7 / Android 15, arm64
+$ANDROID_HOME/platform-tools/adb install -r app-debug.apk
+$ANDROID_HOME/platform-tools/adb shell am start -n com.bookies.reader/.MainActivity
+$ANDROID_HOME/platform-tools/adb exec-out screencap -p > shot.png
+```
+
+Bookies is already installed in that AVD; installs survive emulator restarts. The image
+is `system-images;android-35;google_apis;arm64-v8a`, native on this M2 — it boots in
+seconds.
+
+**Getting the APK is the awkward part.** Large downloads from GitHub's artifact host
+(`*.blob.core.windows.net`) truncate repeatedly here, and `gh run download` hangs; the
+Google CDN is fine. Downloading the artifact from the Actions page in a browser works
+and is the path of least resistance. Do not work around this by putting `gh auth token`
+into a shell command — the user rejected that, correctly, since it exposes the token.
 
 ### How to verify work anyway
 
@@ -147,13 +172,17 @@ Compose, Android framework classes or Readium cannot be compiled here at all.
 ```
 data/model/     Anchor (W3C-shaped, redundant), BookFormat, StorageState, enums
 data/db/        Room entities, DAOs, FTS4 search, converters
-data/repo/      FileStore (app-private paths, SHA-256), PhysicalBooks
+data/repo/      FileStore (app-private paths, SHA-256), PhysicalBooks,
+                OpenLibrary (ISBN -> metadata, pure parse behind a Fetcher seam)
 epub/           TextAnchoring (fuzzy re-anchor), BookBundle (.bookies zip),
-                BundleFormat (on-disk contract), EpubImporter (hand-rolled OPF parser)
+                BundleFormat (on-disk contract), EpubImporter (hand-rolled OPF parser),
+                KindleClippings (My Clippings.txt parser + revision dedup)
 drive/          DriveAuth (AuthorizationClient), DriveClient (REST v3 over OkHttp),
                 ArchiveManager (archive/restore state machine)
 export/         MarkdownExporter
 ui/shelf/       ShelfScreen, ShelfViewModel, BookOpenAnimation (the hinge)
+ui/index/       IndexModel (all the logic, Compose-free so it is testable),
+                AnnotationIndexScreen (layout only)
 ui/reader/      ReaderScreen — THE ONE REAL STUB
 ```
 
@@ -180,25 +209,58 @@ Open Library's fixtures came from its published API docs, not a live response �
 service was unreachable when they were written, so `number_of_pages` in particular is
 worth re-checking on the first real run.
 
-**Not started:** the barcode scanner itself (ML Kit, needs a device), ML Kit page OCR.
+**Not started:** the barcode scanner (ML Kit, needs a device), ML Kit page OCR.
 
-**Written but never compiled by a real Android build:** the annotation index screen and
-the shelf/hinge/index/reader navigation. Their Compose layers are unverified — only CI
-can check those. The logic under both was deliberately kept Compose-free so it could be
-tested here; see `ui/index/IndexModel.kt`.
+**Proven on a device (2026-09-20):** the app launches without crashing, Room builds its
+schema (`bookies.db` + WAL present), `Theme.kt` applies (the FAB renders spine brown, not
+Material purple), and the empty shelf state reads correctly.
 
-**Stubbed:** `ui/reader/ReaderScreen.kt` — the Readium navigator. Its six-step sketch has
-now been **verified signature by signature against Readium 3.0.3** (see the AAR recipe
-above), so what is left is Compose/fragment glue that needs a compiler, not guesswork.
-Write it once CI is green rather than before.
+**Written, compiles, but never exercised:** the whole shelf → hinge → index → reader flow.
+Nothing has been tapped, because no book has been imported yet. This is the single
+biggest untested area and the next thing to do.
 
-Dependency versions in `gradle/libs.versions.toml` all resolve as of 2026-09-20 — every
-pin was checked against Google's Maven and Maven Central. They are no longer guesses,
-though Readium is pinned at 3.0.3 while 3.4.0 is current.
+**Stubbed:** `ui/reader/ReaderScreen.kt`. Its six-step sketch is verified signature by
+signature against Readium 3.0.3 (see the AAR recipe above), so what remains is Compose and
+fragment glue. `AndroidFragment` + `FragmentFactory` across configuration changes is the
+one genuinely open question.
+
+Dependency versions in `gradle/libs.versions.toml` all resolve and all build. Readium is
+pinned at 3.0.3 while 3.4.0 is current.
+
+## Known issues, in rough priority order
+
+1. **`InputDispatcher: Dropping untrusted touch event ... obscuring opacity = 1.00`** fires
+   repeatedly on the shelf. Android is refusing touches because something opaque covers the
+   target. Prime suspect is `BookOpenTransition`'s full-screen `leaf`, which would make
+   tapping a cover silently do nothing. Unconfirmed — needs a book on the shelf to test.
+2. **Import outcomes are swallowed.** `EpubImporter.Outcome` is discarded on both the
+   picker and intent routes, so `Failed`, `EditionConflict` and `AlreadyPresent` are
+   invisible: share a corrupt EPUB and nothing happens, with no explanation.
+3. **A failed restore leaves the cover stuck** at 0.3, because `clearTransfer` drops the
+   entry on failure as well as success. Carries its own TODO.
+4. **The status bar is illegible** — light icons over the cream background, because the
+   theme never declares its light/dark appearance.
+5. `DriveAuth.accessToken` exceptions are swallowed by a `runCatching` in MainActivity.
+6. **Drive has never been exercised end to end.** `ArchiveManager` and `DriveClient` are
+   written and have never spoken to Google. Needs a Cloud project, the consent screen set
+   to "In production", `drive.file` scope, and the signing key's SHA-1 registered — all
+   user tasks.
 
 ## Gotchas already hit
 
 - Room has no `@Fts5`; FTS5 is not guaranteed present in system SQLite. Use `@Fts4`.
+- All three Readium artifacts declare **core library desugaring required** in their AAR
+  metadata. `CheckAarMetadata` refuses to configure the build without it, before compiling
+  anything, and it fires regardless of minSdk 26 already providing `java.time`.
+- `stickyHeader` is an abstract **member** of `LazyListScope`, not a top-level extension.
+  Importing it cannot resolve; no import is needed. Its `key` parameter does exist.
+- `lifecycle-viewmodel-compose` does **not** bring `lifecycle-runtime-compose`, which is
+  where `collectAsStateWithLifecycle` lives — it only *constrains* it in
+  `dependencyManagement`. Reading a POM, strip that block before believing the dep list.
+- **The local kotlinc workflow does not reproduce the coroutines runtime Gradle assembles.**
+  An exception crossing `withContext` comes back as a *copy* under Gradle (stack-trace
+  recovery), so asserting exception identity passes locally and fails in CI. Assert on type
+  and message. Treat local green as a strong signal, not proof.
 - Readium's `Locator.Locations` has **both** `progression` and `totalProgression`. Ours is
   always the whole-book one — `progression` is progress within the current spine item, and
   using it would put chapter 2 of 12 at 80%, then write that into the db, the bundles and
