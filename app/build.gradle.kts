@@ -29,6 +29,9 @@ android {
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
+        // All three Readium artifacts declare this as required in their AAR metadata, so
+        // the build refuses to configure without it regardless of our minSdk.
+        isCoreLibraryDesugaringEnabled = true
     }
     kotlinOptions { jvmTarget = "17" }
 
@@ -45,6 +48,8 @@ ksp {
 }
 
 dependencies {
+    coreLibraryDesugaring(libs.desugar.jdk.libs)
+
     implementation(libs.androidx.core.ktx)
     implementation(libs.androidx.lifecycle.runtime.ktx)
     implementation(libs.androidx.lifecycle.viewmodel.compose)

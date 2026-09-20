@@ -18,6 +18,7 @@ playServicesAuth = "21.3.0"
 fragmentCompose = "1.8.5"
 # Verify the latest on Maven Central: org.readium.kotlin-toolkit
 readium = "3.0.3"
+desugar = "2.1.5"
 junit = "4.13.2"
 
 [libraries]
@@ -59,6 +60,7 @@ readium-shared = { group = "org.readium.kotlin-toolkit", name = "readium-shared"
 readium-streamer = { group = "org.readium.kotlin-toolkit", name = "readium-streamer", version.ref = "readium" }
 readium-navigator = { group = "org.readium.kotlin-toolkit", name = "readium-navigator", version.ref = "readium" }
 
+desugar-jdk-libs = { group = "com.android.tools", name = "desugar_jdk_libs", version.ref = "desugar" }
 junit = { group = "junit", name = "junit", version.ref = "junit" }
 
 [plugins]
