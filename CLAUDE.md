@@ -399,5 +399,11 @@ re-diagnose them. What is left:
 - Readium's navigator pulls in `androidx.appcompat` transitively, but none of its layouts
   or `EpubNavigatorFragment` itself reference AppCompat widgets — `Theme.Bookies` does not
   need an AppCompat parent.
+- **Readium defaults a reflowable EPUB to paginated**, and `EpubPreferences()` with
+  nothing set leaves it there. Pages then turn by horizontal swipe and nothing else —
+  there is no tap-to-turn unless you add an `InputListener`, and no scrolling unless you
+  pass `scroll = true`. The navigator hierarchy is a scrollable `ViewPager` over a
+  `WebView` that reports `scrollable=false`, which is the quickest way to confirm which
+  mode you are in from `uiautomator dump`.
 - **FTS4 has no `bm25`** (that is FTS5, which this project cannot use). Relevance is
   computed in Kotlin in `SearchModel`, which is also why it is testable.
