@@ -15,7 +15,7 @@ import kotlinx.coroutines.launch
  * Drives the search screen. All the thinking is in SearchModel; this is the part that
  * cannot be unit-tested here, so there is deliberately almost nothing of it.
  */
-class SearchViewModel(private val app: BookiesApp) : ViewModel() {
+internal class SearchViewModel(private val app: BookiesApp) : ViewModel() {
 
     data class UiState(
         val query: String = "",
