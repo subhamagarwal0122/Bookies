@@ -253,10 +253,16 @@ Open Library's fixtures came from its published API docs, not a live response â€
 service was unreachable when they were written, so `number_of_pages` in particular is
 worth re-checking on the first real run.
 
-**Proven on a device (2026-09-20):** the app launches without crashing, Room builds its
-schema (`bookies.db` + WAL present), `Theme.kt` applies (the FAB renders spine brown, not
-Material purple), the empty shelf state reads correctly, and an EPUB imports and appears
-on the shelf.
+**Proven on a device (2026-09-20):** the app launches and Room builds its schema; three
+EPUBs import and sit on the shelf together; tapping a cover opens the annotation index;
+the Readium reader opens a book and renders it; a bookmark made in the reader is written
+to the database and appears in that book's index; rotation inside the reader neither
+crashes nor recreates the activity, so `android:configChanges` is doing its job; and the
+status bar is legible against the cream background.
+
+Two things were found broken in that same run and fixed straight after: back did nothing
+anywhere (the manifest never enabled the back-invoked callback), and the shelf, index and
+search screens all drew their headers under the status bar.
 
 **`ReaderScreen` is no longer a stub.** The Readium integration is written: publication
 opening, the navigator fragment, debounced `totalProgression` writes, selection capture
@@ -363,6 +369,15 @@ re-diagnose them. What is left:
   index beneath it â€” the `obscuring opacity = 1.00` dropped-touch reports. `BookOpenTransition`
   now drops the cover from composition entirely at progress 1. If a Compose overlay ever
   "does nothing", check what is invisibly on top of it before checking the handler.
+- **`android:enableOnBackInvokedCallback="true"` is required in the manifest**, and
+  targetSdk 35 does not turn it on for you. Without it every `BackHandler` in the app
+  receives nothing and back silently does nothing on every screen. The only evidence is a
+  logcat warning from `WindowOnBackDispatcher`, which is easy to miss among Compose's own
+  noise: `adb logcat | grep -i onbackinvoked` is the fastest way to confirm it. This was
+  the real cause of "the back button does not work"; consolidating the nested handlers was
+  hygiene, not the fix.
+- **An app targeting SDK 35 is laid out edge to edge on Android 15 whether it asks or
+  not**, so any screen without `systemBarsPadding()` puts its header under the clock.
 - **Nested `BackHandler`s resolve by composition order**, which silently stops working
   when the tree is rearranged. MainActivity owns exactly one, ordering its states
   explicitly. Do not add a second anywhere; screens take an `onBack`/`onClose` callback.

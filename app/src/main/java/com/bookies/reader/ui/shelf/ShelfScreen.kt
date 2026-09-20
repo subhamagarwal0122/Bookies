@@ -1,5 +1,6 @@
 package com.bookies.reader.ui.shelf
 
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -10,6 +11,8 @@ import androidx.compose.foundation.layout.aspectRatio
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.lazy.grid.GridCells
 import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
 import androidx.compose.foundation.lazy.grid.items
@@ -29,6 +32,8 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.StrokeCap
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
@@ -54,7 +59,7 @@ fun ShelfScreen(
     val books by viewModel.books.collectAsStateWithLifecycle()
     val transfers by viewModel.transfers.collectAsStateWithLifecycle()
 
-    Box(modifier.fillMaxSize()) {
+    Box(modifier.fillMaxSize().systemBarsPadding()) {
         LazyVerticalGrid(
             columns = GridCells.Adaptive(minSize = 112.dp),
             // Extra room at the foot so the last row never sits under the add button.
@@ -102,7 +107,7 @@ fun ShelfScreen(
                 containerColor = MaterialTheme.colorScheme.primary.copy(alpha = 0.12f),
                 contentColor = MaterialTheme.colorScheme.primary
             ) {
-                Text(text = "⌕", style = MaterialTheme.typography.titleMedium)
+                MagnifierGlyph(tint = MaterialTheme.colorScheme.primary)
             }
 
             SmallFloatingActionButton(
@@ -113,6 +118,30 @@ fun ShelfScreen(
                 Text(text = "+", style = MaterialTheme.typography.titleLarge)
             }
         }
+    }
+}
+
+/**
+ * A magnifier, drawn rather than typed.
+ *
+ * U+2315 renders as a broken box in the system font on Android 15, and pulling in
+ * material-icons for one shape is a dependency this project deliberately does without.
+ * Two strokes are cheaper than either.
+ */
+@Composable
+private fun MagnifierGlyph(tint: Color, modifier: Modifier = Modifier) {
+    Canvas(modifier.size(18.dp)) {
+        val r = size.minDimension * 0.34f
+        val centre = Offset(size.width * 0.42f, size.height * 0.42f)
+        val stroke = size.minDimension * 0.10f
+        drawCircle(color = tint, radius = r, center = centre, style = Stroke(width = stroke))
+        drawLine(
+            color = tint,
+            start = Offset(centre.x + r * 0.72f, centre.y + r * 0.72f),
+            end = Offset(size.width * 0.86f, size.height * 0.86f),
+            strokeWidth = stroke,
+            cap = StrokeCap.Round
+        )
     }
 }
 

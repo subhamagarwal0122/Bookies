@@ -14,6 +14,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -72,7 +73,10 @@ fun AnnotationIndexScreen(
         groupForDisplay(annotations, query, filter)
     }
 
-    Column(modifier.fillMaxSize()) {
+    // systemBarsPadding, or the header sits underneath the status bar: on Android 15 an
+    // app targeting SDK 35 is laid out edge to edge whether it asks to be or not, and the
+    // back affordance ends up sharing pixels with the clock.
+    Column(modifier.fillMaxSize().systemBarsPadding()) {
         IndexHeader(
             book = book,
             annotationCount = annotations.size,
