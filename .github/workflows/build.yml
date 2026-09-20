@@ -1,0 +1,64 @@
+# The compiler this project does not have locally.
+#
+# There is no Android SDK on the development machine and no Gradle wrapper committed,
+# so this workflow is where the build is actually checked: it resolves the dependency
+# versions, runs KSP (which is the only thing that validates Room's @Query SQL), compiles
+# Compose, runs the anchoring tests and leaves a debug APK to sideload.
+#
+# No wrapper means `gradle` comes from setup-gradle's `gradle-version` rather than
+# `./gradlew`. Generate a wrapper once Android Studio is installed and this can switch to
+# the wrapper, which is the reproducible form.
+
+name: Build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # JDK 17: AGP 8.7's floor, and the local JDK 24 is exactly what blocks building
+      # on the dev machine. The Android SDK itself is preinstalled on ubuntu-latest.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.9'
+
+      # Unit tests first: they are the fast signal, and TextAnchoring is the part of this
+      # codebase with invariants worth failing a build over.
+      - name: Unit tests
+        run: gradle :app:testDebugUnitTest --stacktrace
+
+      - name: Assemble debug APK
+        run: gradle :app:assembleDebug --stacktrace
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: bookies-debug-apk
+          path: app/build/outputs/apk/debug/*.apk
+          if-no-files-found: error
+
+      # Test reports are the only way to see why a run failed without a local build.
+      - uses: actions/upload-artifact@v4
+        if: failure()
+        with:
+          name: test-reports
+          path: app/build/reports/tests/
